@@ -5,11 +5,18 @@ import time
 from telebot import types
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
-
+import os
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except:
+    pass
 # ─────────────────────────────────────────────
 # Configuration & State
 # ─────────────────────────────────────────────
-API_TOKEN = '8266344816:AAG4fYjBssc0niq4F2uvdPOpRcwW-hCrrcA'
+API_TOKEN = os.getenv("BOT_TOKEN")
+if not API_TOKEN:
+    raise ValueError("BOT_TOKEN not set!")
 bot = telebot.TeleBot(API_TOKEN, parse_mode="HTML")
 
 # user_db format: {chat_id: {pid, phid, token, state, last_activity}}
