@@ -58,23 +58,29 @@ def check_api_health(cfg):
 
 
 def check_num(phone, cfg):
-    """Single number check via Maytapi (FORMULA UNTOUCHED)."""
     url = f"https://api.maytapi.com/api/{cfg['pid']}/{cfg['phid']}/checkNumberStatus"
     params = {"token": cfg['token'], "number": f"{phone}@c.us"}
-    try:
-        res = requests.get(url, params=params, timeout=7).json()
-        if res.get('success'):
-            result = res.get('result', {})
-            if result.get('status') == 'banned':
-                return f"<code>{phone}</code> ⛔️", "banned"
-            elif result.get('canReceiveMessage'):
-                return f"<code>{phone}</code> 🔐", "reg"
-            else:
-                return f"<code>{phone}</code> ✅", "fresh"
-        return f"<code>{phone}</code> ⚠️", "err"
-    except Exception:
-        return f"<code>{phone}</code> ⏳", "err"
 
+    for _ in range(2):
+        try:
+            res = requests.get(url, params=params, timeout=10).json()
+            if res.get('success'):
+                result = res.get('result', {})
+                if result.get('status') == 'banned':
+                    return f"<code>{phone}</code> ⛔️", "banned"
+                elif result.get('canReceiveMessage'):
+                    return f"<code>{phone}</code> 🔐", "reg"
+                else:
+                    return f"<code>{phone}</code> ✅", "fresh"
+            time.sleep(0.5)
+        except:
+            time.sleep(0.5)
+
+    return f"<code>{phone}</code> ⏳", "err"
+
+def chunk_list(lst, size=100):
+    for i in range(0, len(lst), size):
+        yield lst[i:i+size]
 
 # ─────────────────────────────────────────────
 # Keyboards
@@ -84,25 +90,30 @@ def check_num(phone, cfg):
 def main_menu():
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton("🔍 CHECK API", callback_data="check_api"),
-        types.InlineKeyboardButton("📲 WSTP CHECKER",
-                                   callback_data="wstp_checker"))
+        types.InlineKeyboardButton("🔗 Connect API", callback_data="check_api"),
+        types.InlineKeyboardButton("📲 Start Checker", callback_data="wstp_checker")
+    )
+    markup.add(
+        types.InlineKeyboardButton("ℹ️ Help", callback_data="help")
+    )
     return markup
-
 
 def api_menu():
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton("🗑️ RESET API", callback_data="reset_api"),
-        types.InlineKeyboardButton("📲 WSTP CHECKER",
-                                   callback_data="wstp_checker"))
+        types.InlineKeyboardButton("📲 Start Checking", callback_data="wstp_checker"),
+        types.InlineKeyboardButton("🗑 Reset API", callback_data="reset_api")
+    )
+    markup.add(
+        types.InlineKeyboardButton("🔙 Back", callback_data="restart")
+    )
     return markup
-
 
 def restart_keyboard():
     markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("🔄 RESTART",
-                                          callback_data="restart"))
+    markup.add(
+        types.InlineKeyboardButton("🔁 Start New Check", callback_data="restart")
+    )
     return markup
 
 
@@ -122,11 +133,13 @@ def send_welcome(message):
         'last_activity': datetime.now()
     }
 
-    msg = ("<b>👋 Welcome to Whatsapp Checker Bot! 📲</b>\n\n"
-           "🚀 High-speed WhatsApp Number Validator\n"
-           "💥 <b>Created By:</b> @Lohit_69\n\n"
-           "────────────────────\n"
-           "👉 Please click <b>CHECK API</b> to verify your connection status.")
+    msg = (
+        "<b>🚀 WhatsApp Checker</b>\n"
+        "━━━━━━━━━━━━━━\n"
+        "⚡ Fast Bulk Validator\n"
+        "📦 Smart Batch Processing\n\n"
+        "🔗 Connect API to start"
+    )
     bot.send_message(cid, msg, reply_markup=main_menu())
 
 
@@ -189,7 +202,15 @@ def handle_callbacks(call):
     elif call.data == "restart":
         user_db[cid]['state'] = 'IDLE'
         send_welcome(call.message)
-
+    elif call.data == "help":
+        bot.send_message(cid,
+            "📖 <b>How to use:</b>\n\n"
+            "1️⃣ Connect API\n"
+            "2️⃣ Click Start Checker\n"
+            "3️⃣ Send numbers (single or bulk)\n\n"
+            "⚡ Supports unlimited numbers\n"
+            "📦 Auto batch processing"
+        )
 
 @bot.message_handler(func=lambda m: True)
 def handle_text(message):
@@ -237,40 +258,91 @@ def handle_text(message):
             bot.reply_to(message, "❌ No valid numbers found!")
             return
 
-        wait_msg = bot.send_message(
-            cid, f"⏳ <b>Queue:</b> Checking {len(nums)} numbers...")
-        results = []
-        counts = {"fresh": 0, "reg": 0, "banned": 0, "err": 0}
+        bot.send_message(cid, f"⏳ Total {len(nums)} numbers received...\nProcessing in batches...")
 
-        with ThreadPoolExecutor(max_workers=10) as executor:  # Increased speed
-            futures = [
-                executor.submit(check_num, n, user_db[cid]) for n in nums
-            ]
-            for f in futures:
-                text, category = f.result()
-                results.append(text)
-                counts[category] += 1
+        batches = list(chunk_list(nums, 100))
+        error_numbers = []   # ✅ global error list
 
-        report = ("📊 <b>Results:</b>\n"
-                  "━━━━━━━━━━━━━━\n"
-                  "✅ Fresh: {}\n"
-                  "🔐 Registered: {}\n"
-                  "⛔️ Banned: {}\n"
-                  "━━━━━━━━━━━━━━\n\n").format(
-                      counts['fresh'], counts['reg'],
-                      counts['banned']) + "\n".join(results)
+        from concurrent.futures import as_completed
 
-        if len(report) > 4000:
-            bot.send_message(cid,
-                             "📋 (Report truncated due to size limit...)\n" +
-                             "\n".join(results[:50]),
-                             reply_markup=restart_keyboard())
+        for batch_index, batch in enumerate(batches, start=1):
+
+            bot.send_message(cid, f"⚙️ Processing batch {batch_index}/{len(batches)}...")
+            
+            results = []
+            counts = {"fresh": 0, "reg": 0, "banned": 0, "err": 0}
+
+
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                futures = [executor.submit(check_num, n, user_db[cid]) for n in batch]
+
+                for f in as_completed(futures):
+                    text, category = f.result()
+                    results.append(text)
+                    counts[category] += 1
+
+                    if category == "err":
+                        num = re.sub(r"\D", "", text)
+                        if num:
+                            error_numbers.append(num)
+            # ✅ SUMMARY AFTER batch complete
+            summary = (
+                "📊 <b>Results (Batch {}):</b>\n"
+                "━━━━━━━━━━━━━━\n"
+                "✅ Fresh: {}\n"
+                "🔐 Registered: {}\n"
+                "⛔️ Banned: {}\n"
+                "━━━━━━━━━━━━━━"
+            ).format(batch_index, counts['fresh'], counts['reg'], counts['banned'])
+
+            bot.send_message(cid, summary)
+
+            # ✅ THEN NUMBERS
+            result_text = "\n".join(results)
+
+            if len(result_text) > 4000:
+                for i in range(0, len(results), 50):
+                    bot.send_message(cid, "\n".join(results[i:i+50]))
+            else:
+                bot.send_message(cid, result_text)
+
+            delay = 0.3 if len(batch) <= 20 else 0.5 if len(batch) <= 100 else 1
+            time.sleep(delay)
+
+        # ✅ AFTER ALL BATCHES FINISHED
+
+        error_count = len(error_numbers)
+
+        # 1. FINAL MESSAGE (always)
+        final_msg = (
+            "✅ <b>PROCESS COMPLETED</b>\n"
+            "━━━━━━━━━━━━━━\n"
+            "📊 All batches processed successfully\n\n"
+        )
+
+        # 2. ADD error info if exists
+        if error_count > 0:
+            final_msg += f"⚠️ Failed Numbers: <b>{error_count}</b>\n📎 File attached below"
         else:
-            bot.edit_message_text(report,
-                                  cid,
-                                  wait_msg.message_id,
-                                  reply_markup=restart_keyboard())
+            final_msg += "🎯 No errors found"
 
+        bot.send_message(
+            cid,
+            final_msg,
+            reply_markup=restart_keyboard()
+        )
+
+        # 3. THEN send file (only if error আছে)
+        if error_count > 0:
+            file_path = f"errors_{cid}_{int(time.time())}.txt"
+
+            with open(file_path, "w") as f:
+                f.write("\n".join(sorted(set(error_numbers))))
+
+            with open(file_path, "rb") as f:
+                bot.send_document(cid, f)
+
+            os.remove(file_path)
 
 if __name__ == "__main__":
     bot.infinity_polling()
